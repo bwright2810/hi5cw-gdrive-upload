@@ -12,6 +12,7 @@ import com.google.api.client.util.store.FileDataStoreFactory
 import com.google.api.services.drive.Drive
 import com.google.api.services.drive.DriveScopes
 import com.google.api.services.drive.model.File
+import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.InputStreamReader
@@ -23,7 +24,7 @@ class GdriveUploader {
 			if (args.isEmpty()) {
 				throw RuntimeException("file to upload argument required")
 			}
-			
+
 			GdriveUploader().execute(args[0])
 		}
 
@@ -34,15 +35,14 @@ class GdriveUploader {
 		val SCOPES = listOf(DriveScopes.DRIVE)
 	}
 
-	val driveService: Drive
-		get() {
-			return Drive.Builder(HTTP_TRANSPORT, JSON_FACTORY, authorize())
-					.setApplicationName("H5 GDrive Uploader")
-					.build()
-		}
+	val driveService: Drive by lazy {
+		Drive.Builder(HTTP_TRANSPORT, JSON_FACTORY, authorize())
+			.setApplicationName("H5 GDrive Uploader")
+			.build()
+	}
 
 	fun authorize(): Credential {
-		val inStream = GdriveUploader::class.java.getResourceAsStream("client_secret.json")
+		val inStream = FileInputStream("client_secret.json")
 
 		val clientSecrets = GoogleClientSecrets.load(JSON_FACTORY, InputStreamReader(inStream))
 
@@ -67,23 +67,23 @@ class GdriveUploader {
 		val file = driveService.files().insert(fileMetaData, mediaContent).setFields("id").execute();
 		println("File ID: ${file.id}")
 	}
-	
+
 	fun exportResource(resource: String): String {
 		var isStream: InputStream? = null
 		var osStream: OutputStream? = null
 		var jarFolder = ""
-		
+
 		try {
 			isStream = GdriveUploader::class.java.getResourceAsStream(resource)
 			if (isStream == null) {
 				throw RuntimeException("null resource")
 			}
-			
+
 			var readBytes = 0
 			val buffer = ByteArray(4096)
 			jarFolder = java.io.File(GdriveUploader::class.java.getProtectionDomain().getCodeSource().getLocation().toURI().getPath()).getParentFile().getPath().replace('\\', '/')
 			osStream = FileOutputStream(jarFolder + "\\" + resource)
-			
+
 			readBytes = isStream.read(buffer)
 			while (readBytes > 0) {
 				osStream.write(buffer, 0, readBytes)
@@ -93,7 +93,7 @@ class GdriveUploader {
 			isStream?.close()
 			osStream?.close()
 		}
-		
+
 		return jarFolder + "\\" + resource
 	}
 }
