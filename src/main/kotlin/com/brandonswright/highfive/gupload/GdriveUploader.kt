@@ -12,11 +12,16 @@ import com.google.api.client.util.store.FileDataStoreFactory
 import com.google.api.services.drive.Drive
 import com.google.api.services.drive.DriveScopes
 import com.google.api.services.drive.model.File
+import com.google.api.services.drive.model.ParentReference
+import com.google.api.services.drive.model.Permission
+import org.apache.commons.io.FileUtils
+import java.io.ByteArrayOutputStream
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.OutputStream
+import java.nio.charset.Charset
 
 class GdriveUploader {
 	companion object {
@@ -25,20 +30,23 @@ class GdriveUploader {
 				throw RuntimeException("file to upload argument required")
 			}
 
-			GdriveUploader().execute(args[0])
+			val gdriveFolder = if (args.size > 1) args[1] else ""
+
+			GdriveUploader().execute(args[0], gdriveFolder)
 		}
 
 		val HTTP_TRANSPORT = GoogleNetHttpTransport.newTrustedTransport()
 		val DATA_STORE_DIR = java.io.File(System.getProperty("user.dir"), "gdrive-credentials")
 		val DATA_STORE_FACTORY = FileDataStoreFactory(DATA_STORE_DIR)
 		val JSON_FACTORY = JacksonFactory.getDefaultInstance()
-		val SCOPES = listOf(DriveScopes.DRIVE)
+		val SCOPES = listOf(DriveScopes.DRIVE, DriveScopes.DRIVE_FILE, DriveScopes.DRIVE_APPDATA)
+		val GDRIVE_DL_URL = "https://drive.google.com/uc?export=download&id="
 	}
 
 	val driveService: Drive by lazy {
 		Drive.Builder(HTTP_TRANSPORT, JSON_FACTORY, authorize())
-			.setApplicationName("H5 GDrive Uploader")
-			.build()
+				.setApplicationName("H5 GDrive Uploader")
+				.build()
 	}
 
 	fun authorize(): Credential {
@@ -58,14 +66,69 @@ class GdriveUploader {
 		return credential
 	}
 
-	fun execute(fileToUpload: String) {
+	fun execute(fileToUpload: String, gdriveFolder: String = "") {
+		var folderId = ""
+		if (gdriveFolder.isNotEmpty()) {
+			val result = driveService.files().list()
+					.setQ("title='${gdriveFolder}'")
+					.execute()
+
+			val folder = result.items.first()
+			folderId = folder.id
+		}
+
 		val fileMetaData = File()
 		val brokenDownFilePath = fileToUpload.replace("\\", "/").split("/")
 		fileMetaData.title = brokenDownFilePath[brokenDownFilePath.size - 1]
+		if (folderId.isNotEmpty()) {
+			fileMetaData.parents = listOf(ParentReference().setId(folderId))
+		}
+
 		val filePath = java.io.File(fileToUpload)
 		val mediaContent = FileContent("*/*", filePath)
-		val file = driveService.files().insert(fileMetaData, mediaContent).setFields("id").execute();
-		println("File ID: ${file.id}")
+
+		val fields = if (folderId.isNotEmpty()) "id, parents" else "id"
+		val file = driveService.files().insert(fileMetaData, mediaContent).setFields(fields).execute();
+
+		println("Uploaded ${fileMetaData.title}")
+		
+		val dlLink = GDRIVE_DL_URL + file.id
+
+		driveService.permissions().insert(file.id, Permission()
+				.setType("anyone")
+				.setRole("reader"))
+				.setFields("id")
+				.execute()
+		
+		println("Download link: ${dlLink}")
+
+		val campersQ = if (folderId.isNotEmpty()) "title='campers.txt' and '${folderId}' in parents" else "title='campers.txt'"
+
+		val campersTxtResult = driveService.files().list()
+				.setQ(campersQ)
+				.execute()
+
+		val campersTxtFile = campersTxtResult.items.first()
+		val outputStream = ByteArrayOutputStream();
+		driveService.files().get(campersTxtFile.id).executeMediaAndDownloadTo(outputStream)
+		var txtFileString = String(outputStream.toByteArray(), Charset.defaultCharset())
+		val newTxtFileString = txtFileString + fileMetaData.title + " - " + dlLink + "\n"
+
+		val campersFile = java.io.File("campers.txt")
+		FileUtils.writeStringToFile(campersFile, newTxtFileString)
+
+		val campersFileMetaData = File()
+		campersFileMetaData.title = "campers.txt"
+		if (folderId.isNotEmpty()) {
+			fileMetaData.parents = listOf(ParentReference().setId(folderId))
+		}
+
+		val campersMediaContent = FileContent("*/*", campersFile)
+
+		val campersFields = if (folderId.isNotEmpty()) "id, parents" else "id"
+		driveService.files().update(campersTxtFile.id, campersFileMetaData, campersMediaContent).setFields(campersFields).execute();
+		
+		println("Updated campers.txt")
 	}
 
 	fun exportResource(resource: String): String {
